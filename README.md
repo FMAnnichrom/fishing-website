@@ -107,11 +107,18 @@ In standalone mode (`npm run build:pages` or when `/api/*` is unavailable):
 - Recent scans, statistics, and community URL reports persist locally in browser `localStorage`.
 - External threat-intelligence providers (`Google Safe Browsing`, `PhishTank`, `URLhaus`) honestly indicate that a backend proxy is required to protect private API keys.
 
-### Deploy via GitHub Actions (Included)
+### Deploy to GitHub Pages (Two Options)
 
-1. Push this repository to GitHub with `main` as your default branch.
+> **Important**: Do **not** set GitHub Pages to `main` → `/ (root)`, because the repository root `index.html` points to uncompiled `/src/main.tsx` TypeScript sources and will show a white screen on static hosting.
+
+**Option A — GitHub Actions (Recommended):**
+1. Push this repository to GitHub (`main` branch).
 2. In your GitHub repository, open **Settings → Pages** and set **Source** to **GitHub Actions**.
 3. The included workflow (`.github/workflows/deploy-pages.yml`) automatically runs ML training, executes unit tests, builds `dist/` via `npm run build:pages`, and publishes to `https://<your-username>.github.io/<repo-name>/`.
+
+**Option B — Deploy from `/docs` Branch Folder:**
+1. Run `npm run build:pages` (which builds the compiled standalone bundle into both `dist/` and `docs/`) and commit `docs/`.
+2. In **Settings → Pages**, set **Source** to **Deploy from a branch**, select branch **`main`**, and select folder **`/docs`**.
 
 ### Local Static Build Check
 

@@ -1,4 +1,5 @@
 import { getActiveKeywords } from '../db/database';
+import { safeBoundedDecode } from './advancedUrlAnalyzer';
 import type { KeywordMatch, KeywordRecord } from '../../shared/types';
 
 function escapeRegex(value: string): string {
@@ -29,16 +30,23 @@ export function detectSuspiciousKeywords(
   const seen = new Set<string>();
 
   let urlSurface = normalizedUrl.toLowerCase();
+  let decodedSurface = urlSurface;
   try {
     const parsed = new URL(normalizedUrl);
     // Focus on host + path + search rather than protocol
     urlSurface = `${parsed.hostname}${parsed.pathname}${parsed.search}`.toLowerCase();
+    const decodedPath = safeBoundedDecode(parsed.pathname).decoded;
+    const decodedSearch = safeBoundedDecode(parsed.search).decoded;
+    decodedSurface = `${parsed.hostname}${decodedPath}${decodedSearch}`.toLowerCase();
   } catch {
     // Fallback to raw normalizedUrl
   }
 
   for (const kw of keywords) {
-    if (matchesKeywordSurface(urlSurface, kw.keyword)) {
+    if (
+      matchesKeywordSurface(urlSurface, kw.keyword) ||
+      matchesKeywordSurface(decodedSurface, kw.keyword)
+    ) {
       const key = `URL:${kw.keyword}`;
       if (!seen.has(key)) {
         seen.add(key);

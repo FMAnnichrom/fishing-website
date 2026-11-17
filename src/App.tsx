@@ -1,35 +1,54 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Loader2, Search, X } from 'lucide-react';
-import type { AnalysisReport, RecentScanItem, StatsSummary } from '../shared/types';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import type {
+  AnalysisReport,
+  RecentScanItem,
+  StatsSummary,
+  UserReportRecord,
+} from '../shared/types';
+import { AboutDocsView } from './components/AboutDocsView';
 import { AnalysisResultCard } from './components/AnalysisResultCard';
-import { ModelEvaluationView } from './components/ModelEvaluationView';
 import { RecentScansSection } from './components/RecentScansSection';
 import { ReportUrlModal } from './components/ReportUrlModal';
+import { ScannerHero } from './components/ScannerHero';
+import { SettingsView, type UiPreferences } from './components/SettingsView';
+import { StatsOverview } from './components/StatsOverview';
 import { ThreatDatabaseView } from './components/ThreatDatabaseView';
+import { ThreatIntelSidebar } from './components/ThreatIntelSidebar';
 import { TopNav, type ActiveTab } from './components/TopNav';
-import { analyzeUrl, fetchAnalysisById, fetchStatsAndRecent } from './services/api';
+import {
+  analyzeUrl,
+  fetchAnalysisById,
+  fetchHealth,
+  fetchStatsAndRecent,
+  fetchThreatFeeds,
+  type HealthResponse,
+} from './services/api';
 
-const SAFE_TEST_EXAMPLES = [
-  {
-    label: 'Legitimate reference',
-    url: 'https://www.wikipedia.org/wiki/Phishing',
-  },
-  {
-    label: 'Suspicious phishing pattern',
-    url: 'http://secure-paypal-login-verify.xyz/account/update?confirm-identity=1',
-  },
-  {
-    label: 'Safe threat-feed fixture',
-    url: 'http://testsafebrowsing.appspot.com/s/phishing.html',
-  },
-  {
-    label: 'Punycode homograph test',
-    url: 'http://xn--pple-43d.com/support/reset-password?urgent-action=true',
-  },
-];
+const PREFS_STORAGE_KEY = 'phish_detector_ui_prefs_v1';
+const DEFAULT_PREFS: UiPreferences = {
+  pageSize: 10,
+  autoExpandUrlBreakdown: false,
+};
+
+function readInitialPreferences(): UiPreferences {
+  try {
+    const raw = window.localStorage.getItem(PREFS_STORAGE_KEY);
+    if (!raw) return DEFAULT_PREFS;
+    const parsed = JSON.parse(raw) as Partial<UiPreferences>;
+    return {
+      pageSize:
+        typeof parsed.pageSize === 'number' && [5, 10, 15, 25].includes(parsed.pageSize)
+          ? parsed.pageSize
+          : DEFAULT_PREFS.pageSize,
+      autoExpandUrlBreakdown: Boolean(parsed.autoExpandUrlBreakdown),
+    };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('analyzer');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [urlInput, setUrlInput] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,22 +56,86 @@ export default function App() {
 
   const [summary, setSummary] = useState<StatsSummary | null>(null);
   const [recentScans, setRecentScans] = useState<RecentScanItem[]>([]);
+  const [pendingReports, setPendingReports] = useState<UserReportRecord[]>([]);
+  const [reportsById, setReportsById] = useState<Record<string, AnalysisReport>>({});
+  const fetchedReportIdsRef = useRef<Set<string>>(new Set());
 
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [healthLoading, setHealthLoading] = useState(true);
+  const [healthError, setHealthError] = useState(false);
+
+  const [preferences, setPreferences] = useState<UiPreferences>(readInitialPreferences);
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportPrefillUrl, setReportPrefillUrl] = useState('');
 
-  const loadDashboardData = useCallback(async () => {
+  const updatePreferences = useCallback((next: UiPreferences) => {
+    setPreferences(next);
     try {
-      const data = await fetchStatsAndRecent(15);
-      setSummary(data.summary);
-      setRecentScans(data.recentScans);
+      window.localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(next));
     } catch {
-      // Keep UI functional even if initial stats fail
+      // Ignore storage quota / private-browsing errors
     }
   }, []);
 
+  const hydrateScanReports = useCallback(async (scans: RecentScanItem[]) => {
+    const targets = scans
+      .slice(0, 12)
+      .filter((scan) => !fetchedReportIdsRef.current.has(scan.id));
+    if (targets.length === 0) return;
+
+    for (const scan of targets) {
+      fetchedReportIdsRef.current.add(scan.id);
+    }
+
+    const results = await Promise.allSettled(targets.map((s) => fetchAnalysisById(s.id)));
+    const loaded: Record<string, AnalysisReport> = {};
+    for (const res of results) {
+      if (res.status === 'fulfilled') {
+        loaded[res.value.id] = res.value;
+      }
+    }
+    if (Object.keys(loaded).length > 0) {
+      setReportsById((prev) => ({ ...prev, ...loaded }));
+    }
+  }, []);
+
+  const loadDashboardData = useCallback(async () => {
+    try {
+      const [statsData, feedData] = await Promise.all([
+        fetchStatsAndRecent(50),
+        fetchThreatFeeds().catch(() => ({ indicators: [], pendingReports: [] })),
+      ]);
+      setSummary(statsData.summary);
+      setRecentScans(statsData.recentScans);
+      setPendingReports(feedData.pendingReports);
+      void hydrateScanReports(statsData.recentScans);
+    } catch {
+      // Keep UI responsive if initial stats fail
+    }
+  }, [hydrateScanReports]);
+
   useEffect(() => {
-    loadDashboardData();
+    let active = true;
+    fetchHealth()
+      .then((data) => {
+        if (!active) return;
+        setHealth(data);
+        setHealthError(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setHealthError(true);
+      })
+      .finally(() => {
+        if (active) setHealthLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    void loadDashboardData();
   }, [loadDashboardData]);
 
   async function runAnalysis(targetUrl: string) {
@@ -60,6 +143,8 @@ export default function App() {
     setAnalyzing(true);
     try {
       const report = await analyzeUrl(targetUrl);
+      fetchedReportIdsRef.current.add(report.id);
+      setReportsById((prev) => ({ ...prev, [report.id]: report }));
       setCurrentReport(report);
       await loadDashboardData();
     } catch (err) {
@@ -71,7 +156,7 @@ export default function App() {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    runAnalysis(urlInput);
+    void runAnalysis(urlInput);
   }
 
   function handleClear() {
@@ -82,14 +167,39 @@ export default function App() {
 
   async function handleSelectRecentScan(id: string) {
     setError(null);
+    const cached = reportsById[id];
+    if (cached) {
+      setCurrentReport(cached);
+      setUrlInput(cached.normalizedUrl);
+      setActiveTab('dashboard');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     try {
       const report = await fetchAnalysisById(id);
+      fetchedReportIdsRef.current.add(report.id);
+      setReportsById((prev) => ({ ...prev, [report.id]: report }));
       setCurrentReport(report);
       setUrlInput(report.normalizedUrl);
-      setActiveTab('analyzer');
+      setActiveTab('dashboard');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load scan record.');
     }
+  }
+
+  function handleClearStandaloneHistory() {
+    try {
+      window.localStorage.removeItem('phish_detector_standalone_analyses_v1');
+      window.localStorage.removeItem('phish_detector_standalone_reports_v1');
+    } catch {
+      // Ignore storage failures
+    }
+    fetchedReportIdsRef.current.clear();
+    setReportsById({});
+    setCurrentReport(null);
+    void loadDashboardData();
   }
 
   function openReportDialog(prefill = '') {
@@ -97,167 +207,110 @@ export default function App() {
     setReportModalOpen(true);
   }
 
+  const inspectedReports = Object.values(reportsById);
+
   return (
-    <div id="top" className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+    <div id="top" className="min-h-screen flex flex-col bg-[#F8FAFC] text-[#111827]">
       <TopNav
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         onOpenReportModal={() => openReportDialog()}
       />
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
-        {activeTab === 'analyzer' && (
-          <div className="space-y-8">
-            {/* Primary URL Analyzer Hero Card */}
-            <section className="rounded-xl border border-slate-200 bg-white px-6 py-8 sm:px-8">
-              <div className="max-w-3xl">
-                <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl text-balance">
-                  Phishing URL Detector
-                </h1>
-                <p className="mt-2.5 text-base leading-relaxed text-slate-600">
-                  Paste any website link below to evaluate phishing risk using machine learning,
-                  threat-intelligence databases, URL structure inspection, and suspicious keyword
-                  analysis.
-                </p>
-              </div>
+      <main className="mx-auto w-[94%] max-w-[1760px] flex-1 py-6 sm:py-8">
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            {/* 12-Column Hero URL Scanner + Security Engine Overview */}
+            <ScannerHero
+              urlInput={urlInput}
+              onChangeUrl={setUrlInput}
+              onSubmit={handleSubmit}
+              onSelectSample={(sampleUrl) => {
+                setUrlInput(sampleUrl);
+                void runAnalysis(sampleUrl);
+              }}
+              onClear={handleClear}
+              analyzing={analyzing}
+              hasReport={Boolean(currentReport)}
+              error={error}
+              health={health}
+              healthLoading={healthLoading}
+              healthError={healthError}
+            />
 
-              <form onSubmit={handleSubmit} className="mt-6">
-                <label htmlFor="url-input" className="sr-only">
-                  Website URL to analyze
-                </label>
-                <div className="flex flex-col gap-3 sm:flex-row">
-                  <div className="relative flex-1">
-                    <Search
-                      className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400"
-                      aria-hidden="true"
-                    />
-                    <input
-                      id="url-input"
-                      type="text"
-                      value={urlInput}
-                      onChange={(e) => setUrlInput(e.target.value)}
-                      placeholder="Paste a website URL here..."
-                      autoComplete="off"
-                      spellCheck={false}
-                      className="w-full rounded-lg border border-slate-300 bg-white py-3.5 pl-11 pr-10 font-mono text-sm text-slate-900 placeholder:font-sans placeholder:text-slate-400 focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-700/15"
-                    />
-                    {urlInput && (
-                      <button
-                        type="button"
-                        onClick={handleClear}
-                        aria-label="Clear URL input"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-700"
-                      >
-                        <X className="h-4 w-4" aria-hidden="true" />
-                      </button>
-                    )}
-                  </div>
+            {/* 5-Card Horizontal Statistics Overview */}
+            <StatsOverview summary={summary} />
 
-                  <div className="flex items-center gap-2.5 shrink-0">
-                    <button
-                      type="submit"
-                      disabled={analyzing}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-700 px-6 py-3.5 text-sm font-semibold text-white transition-colors hover:bg-blue-800 disabled:opacity-60 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700"
-                    >
-                      {analyzing && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-                      <span>{analyzing ? 'Analyzing...' : 'Analyze URL'}</span>
-                    </button>
-
-                    {(urlInput || currentReport) && (
-                      <button
-                        type="button"
-                        onClick={handleClear}
-                        disabled={analyzing}
-                        className="rounded-lg border border-slate-300 bg-white px-4 py-3.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </form>
-
-              {/* Safe quick-test samples */}
-              <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
-                <span>Try a safe test URL:</span>
-                {SAFE_TEST_EXAMPLES.map((sample) => (
-                  <button
-                    key={sample.url}
-                    type="button"
-                    onClick={() => {
-                      setUrlInput(sample.url);
-                      runAnalysis(sample.url);
-                    }}
-                    className="font-medium text-blue-700 hover:text-blue-800 hover:underline focus-visible:outline-2 focus-visible:outline-blue-700"
-                  >
-                    {sample.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Error feedback */}
-              {error && (
-                <div
-                  role="alert"
-                  className="mt-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
-                >
-                  {error}
-                </div>
-              )}
-
-              {/* Loading feedback */}
-              {analyzing && (
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className="mt-6 rounded-lg border border-slate-200 bg-slate-50 px-5 py-4"
-                >
-                  <div className="flex items-center gap-3 text-sm font-medium text-slate-800">
-                    <Loader2 className="h-4 w-4 animate-spin text-blue-700" aria-hidden="true" />
-                    <span>
-                      Running URL normalization, ML classification, keyword extraction, and
-                      threat-intelligence checks...
-                    </span>
-                  </div>
-                </div>
-              )}
-            </section>
-
-            {/* Analysis Results */}
+            {/* Active Security Investigation Report */}
             {currentReport && !analyzing && (
               <AnalysisResultCard
                 report={currentReport}
                 onReportCurrentUrl={(u) => openReportDialog(u)}
+                defaultDetailsExpanded={preferences.autoExpandUrlBreakdown}
               />
             )}
 
-            {/* Threat Statistics & Recent Scans */}
+            {/* Main 2-Column Body: ~70% Recent Scans + ~30% Threat Intel Sidebar */}
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
+              <div className="lg:col-span-8">
+                <RecentScansSection
+                  recentScans={recentScans}
+                  reportsById={reportsById}
+                  selectedScanId={currentReport?.id}
+                  onSelectScan={handleSelectRecentScan}
+                  pageSize={preferences.pageSize}
+                />
+              </div>
+              <div className="lg:col-span-4">
+                <ThreatIntelSidebar
+                  health={health}
+                  healthLoading={healthLoading}
+                  recentScans={recentScans}
+                  inspectedReports={inspectedReports}
+                  pendingReports={pendingReports}
+                  onSelectScan={handleSelectRecentScan}
+                  onOpenThreatIntelTab={() => setActiveTab('threat-intel')}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'history' && (
+          <div className="space-y-6">
+            <StatsOverview summary={summary} />
             <RecentScansSection
-              summary={summary}
               recentScans={recentScans}
+              reportsById={reportsById}
+              selectedScanId={currentReport?.id}
               onSelectScan={handleSelectRecentScan}
+              pageSize={preferences.pageSize}
+              title="Complete Scan History"
+              subtitle="Search, filter by domain or verdict, sort columns, and click any record to open its full report."
             />
           </div>
         )}
 
-        {activeTab === 'recent' && (
-          <RecentScansSection
-            summary={summary}
-            recentScans={recentScans}
-            onSelectScan={handleSelectRecentScan}
+        {activeTab === 'threat-intel' && <ThreatDatabaseView />}
+
+        {activeTab === 'docs' && <AboutDocsView />}
+
+        {activeTab === 'settings' && (
+          <SettingsView
+            preferences={preferences}
+            onUpdatePreferences={updatePreferences}
+            health={health}
+            healthLoading={healthLoading}
+            onClearStandaloneHistory={handleClearStandaloneHistory}
           />
         )}
-
-        {activeTab === 'database' && <ThreatDatabaseView />}
-
-        {activeTab === 'model' && <ModelEvaluationView />}
       </main>
 
-      <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+      <footer className="border-t border-[#E2E8F0] bg-white">
+        <div className="mx-auto flex w-[94%] max-w-[1760px] flex-col gap-2 py-5 text-xs text-[#64748B] sm:flex-row sm:items-center sm:justify-between">
           <span>
-            Phishing URL Detector · Evidence-based security assessment combining ML, keywords, and
-            threat intelligence.
+            Phishing URL Detector · Evidence-based security assessment combining ML, URL
+            forensics, keywords, and threat intelligence.
           </span>
           <span>
             Automated detection assists security decisions and does not guarantee absolute safety.
@@ -269,7 +322,7 @@ export default function App() {
         open={reportModalOpen}
         initialUrl={reportPrefillUrl}
         onClose={() => setReportModalOpen(false)}
-        onSubmitted={loadDashboardData}
+        onSubmitted={() => void loadDashboardData()}
       />
     </div>
   );

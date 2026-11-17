@@ -1,10 +1,11 @@
 export type DetectionVerdict =
-  | 'Malicious / Phishing'
+  | 'Confirmed Malicious'
+  | 'High Risk'
   | 'Suspicious'
-  | 'No Known Threat Detected'
-  | 'Unknown / Unable to Verify';
+  | 'No Known Threat'
+  | 'Unable to Verify';
 
-export type RiskLevel = 'Low' | 'Suspicious' | 'High' | 'Unknown';
+export type RiskLevel = 'Low' | 'Suspicious' | 'High' | 'Confirmed' | 'Unknown';
 
 export type ProviderStatus =
   | 'match'
@@ -34,12 +35,92 @@ export interface KeywordMatch {
   weight: number;
 }
 
+export interface EvidenceFinding {
+  id: string;
+  category: string;
+  pattern: string;
+  matchedText: string;
+  explanation: string;
+  riskContribution: number;
+  source:
+    | 'Threat Intelligence'
+    | 'Brand Impersonation'
+    | 'Heuristic'
+    | 'ML'
+    | 'Website Inspection';
+  severity: 'high' | 'medium' | 'low' | 'info';
+}
+
+export interface QueryParameterAnalysis {
+  name: string;
+  rawValue: string;
+  decodedValue: string;
+  isDuplicate: boolean;
+  isRedirectParam: boolean;
+  isAuthParam: boolean;
+  encodingLayers: number;
+  embeddedUrl?: {
+    raw: string;
+    hostname: string;
+    registrableDomain: string;
+    isRelative: boolean;
+    isExternal: boolean;
+    claimedBrands: string[];
+  };
+}
+
+export interface BrandSimilarityResult {
+  brand: string;
+  officialDomains: string[];
+  matchedToken: string;
+  location: 'subdomain' | 'registrable_domain' | 'path' | 'query_redirect';
+  matchType:
+    | 'exact_impersonation'
+    | 'leetspeak_substitution'
+    | 'unicode_confusable'
+    | 'typosquat_edit_distance'
+    | 'brand_in_path'
+    | 'redirect_brand_lure';
+  similarityScore: number; // 0 to 1
+  editDistance: number;
+  details: string;
+}
+
+export interface AdvancedUrlBreakdown {
+  originalUrl: string;
+  normalizedUrl: string;
+  protocol: string;
+  hostnameRaw: string;
+  hostnameNormalized: string;
+  hostnameCaseMixed: boolean;
+  subdomains: string[];
+  registrableDomain: string;
+  publicSuffix: string;
+  port: string;
+  isStandardPort: boolean;
+  isUnusualPort: boolean;
+  rawPath: string;
+  decodedPath: string;
+  pathEncodingLayers: number;
+  encodedCharacterRatio: number;
+  encodedKeywords: string[];
+  fragment: string;
+  queryParams: QueryParameterAnalysis[];
+  queryParameterCount: number;
+  duplicateParameterCount: number;
+  redirectParameterCount: number;
+  nestedUrlDetected: boolean;
+  externalRedirectDetected: boolean;
+  brandSimilarityResults: BrandSimilarityResult[];
+}
+
 export interface UrlStructuralSignals {
   urlLength: number;
   domainLength: number;
   pathLength: number;
   queryLength: number;
   subdomainCount: number;
+  maxSubdomainLength: number;
   hyphenCount: number;
   dotCount: number;
   specialCharCount: number;
@@ -49,6 +130,7 @@ export interface UrlStructuralSignals {
   isHttps: boolean;
   isPunycode: boolean;
   hasMixedScript: boolean;
+  unicodeConfusableDetected: boolean;
   hasSuspiciousTld: boolean;
   tld: string;
   isUrlShortener: boolean;
@@ -56,6 +138,21 @@ export interface UrlStructuralSignals {
   hasExcessiveSubdomains: boolean;
   hasWordNumberAnomaly: boolean;
   charEntropy: number;
+  suspiciousBrandInSubdomain: boolean;
+  brandDomainMismatch: boolean;
+  brandInPath: boolean;
+  maxBrandSimilarityScore: number;
+  encodedCharacterRatio: number;
+  encodedKeywordDetected: boolean;
+  nestedUrlDetected: boolean;
+  externalRedirectDetected: boolean;
+  redirectParameterCount: number;
+  queryParameterCount: number;
+  duplicateParameterCount: number;
+  unusualPort: boolean;
+  portNumber: number | null;
+  suspiciousAuthenticationPath: boolean;
+  hostnameCaseNormalized: boolean;
   impersonatedBrands: string[];
   anomalies: string[];
 }
@@ -68,8 +165,8 @@ export interface MlFeatureContribution {
 
 export interface MlPredictionResult {
   label: 'phishing' | 'legitimate' | 'unavailable';
-  probability: number; // 0.0 to 1.0 probability of phishing
-  confidence: number; // 0 to 100
+  probability: number;
+  confidence: number;
   engine: string;
   modelVersion: string;
   topFeatures: MlFeatureContribution[];
@@ -92,6 +189,7 @@ export interface WebsiteInspectionResult {
 
 export interface ScoringBreakdown {
   threatIntelPoints: number;
+  brandImpersonationPoints: number;
   mlPoints: number;
   structuralPoints: number;
   keywordPoints: number;
@@ -110,12 +208,14 @@ export interface AnalysisReport {
   submittedUrl: string;
   normalizedUrl: string;
   domain: string;
-  riskScore: number; // 0 - 100
+  riskScore: number;
   riskLevel: RiskLevel;
   verdict: DetectionVerdict;
   mlPrediction: MlPredictionResult;
   inKnownThreatDatabase: boolean;
   keywordMatches: KeywordMatch[];
+  evidenceFindings: EvidenceFinding[];
+  urlBreakdown: AdvancedUrlBreakdown;
   flaggedReasons: string[];
   threatIntelResults: ProviderCheckResult[];
   structuralSignals: UrlStructuralSignals;

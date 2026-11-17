@@ -116,7 +116,7 @@ export function loadAndDeduplicateDataset(csvPath: string): {
     if (seenUrls.has(validated.normalizedUrl)) continue;
     seenUrls.add(validated.normalizedUrl);
 
-    const features = extractMlFeatures(validated.normalizedUrl);
+    const features = extractMlFeatures(rawUrl);
     if (!features) continue;
 
     rows.push({
@@ -266,8 +266,8 @@ export function trainUrlClassifier(
   let vBias = 0;
 
   const lr = 0.04;
-  const l2 = 0.002;
-  const epochs = 180;
+  const l2 = 0.003;
+  const epochs = 220;
   const beta1 = 0.9;
   const beta2 = 0.999;
   const eps = 1e-8;
@@ -356,8 +356,8 @@ export function trainUrlClassifier(
     .slice(0, 16);
 
   const artifact: TrainedUrlModelArtifact = {
-    modelVersion: '1.0.0',
-    algorithm: 'L2-Regularized Logistic Regression (Structural Features + Char 3-4 Gram TF-IDF)',
+    modelVersion: '2.0.0',
+    algorithm: 'L2-Regularized Logistic Regression (Advanced Structural Features + Char 3-4 Gram TF-IDF)',
     trainedAt: new Date().toISOString(),
     structuralFeatureNames: [...STRUCTURAL_FEATURE_NAMES],
     scalerMean: scalerMean.map((n) => Number(n.toFixed(6))),
@@ -368,8 +368,8 @@ export function trainUrlClassifier(
     ngramWeights: wNgram.map((n) => Number(n.toFixed(6))),
     bias: Number(bias.toFixed(6)),
     evaluation: {
-      modelVersion: '1.0.0',
-      algorithm: 'L2-Regularized Logistic Regression (Structural + Char N-Gram TF-IDF)',
+      modelVersion: '2.0.0',
+      algorithm: 'L2-Regularized Logistic Regression (Advanced Structural + Char N-Gram TF-IDF)',
       trainedAt: new Date().toISOString(),
       datasetStats: {
         totalRawRows,

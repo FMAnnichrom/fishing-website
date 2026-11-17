@@ -156,13 +156,24 @@ export function saveAnalysis(report: AnalysisReport, db = getDatabase()): void {
   );
 }
 
+function normalizeLegacyVerdict(verdict: string, inThreatDb = false): RecentScanItem['verdict'] {
+  if (verdict === 'Malicious / Phishing') {
+    return inThreatDb ? 'Confirmed Malicious' : 'High Risk';
+  }
+  if (verdict === 'No Known Threat Detected') return 'No Known Threat';
+  if (verdict === 'Unknown / Unable to Verify') return 'Unable to Verify';
+  return verdict as RecentScanItem['verdict'];
+}
+
 export function getAnalysisById(id: string, db = getDatabase()): AnalysisReport | null {
   const row = db
     .prepare('SELECT report_json FROM analyses WHERE id = ?')
     .get(id) as { report_json: string } | undefined;
   if (!row) return null;
   try {
-    return JSON.parse(row.report_json) as AnalysisReport;
+    const parsed = JSON.parse(row.report_json) as AnalysisReport;
+    parsed.verdict = normalizeLegacyVerdict(parsed.verdict, parsed.inKnownThreatDatabase);
+    return parsed;
   } catch {
     return null;
   }
@@ -183,7 +194,7 @@ export function getRecentScans(limit = 20, db = getDatabase()): RecentScanItem[]
     domain: string;
     risk_score: number;
     risk_level: RecentScanItem['riskLevel'];
-    verdict: RecentScanItem['verdict'];
+    verdict: string;
     in_threat_db: number;
     ml_confidence: number;
     analyzed_at: string;
@@ -195,7 +206,7 @@ export function getRecentScans(limit = 20, db = getDatabase()): RecentScanItem[]
     domain: r.domain,
     riskScore: r.risk_score,
     riskLevel: r.risk_level,
-    verdict: r.verdict,
+    verdict: normalizeLegacyVerdict(r.verdict, r.in_threat_db === 1),
     inKnownThreatDatabase: r.in_threat_db === 1,
     mlConfidence: r.ml_confidence,
     analyzedAt: r.analyzed_at,
@@ -207,10 +218,10 @@ export function getStatsSummary(db = getDatabase()): StatsSummary {
     .prepare(
       `SELECT
         COUNT(*) AS total,
-        SUM(CASE WHEN verdict = 'Malicious / Phishing' THEN 1 ELSE 0 END) AS malicious,
+        SUM(CASE WHEN verdict IN ('Confirmed Malicious', 'High Risk', 'Malicious / Phishing') THEN 1 ELSE 0 END) AS malicious,
         SUM(CASE WHEN verdict = 'Suspicious' THEN 1 ELSE 0 END) AS suspicious,
-        SUM(CASE WHEN verdict = 'No Known Threat Detected' THEN 1 ELSE 0 END) AS clean,
-        SUM(CASE WHEN verdict = 'Unknown / Unable to Verify' THEN 1 ELSE 0 END) AS unknown,
+        SUM(CASE WHEN verdict IN ('No Known Threat', 'No Known Threat Detected') THEN 1 ELSE 0 END) AS clean,
+        SUM(CASE WHEN verdict IN ('Unable to Verify', 'Unknown / Unable to Verify') THEN 1 ELSE 0 END) AS unknown,
         SUM(CASE WHEN in_threat_db = 1 THEN 1 ELSE 0 END) AS intelMatches
        FROM analyses`,
     )

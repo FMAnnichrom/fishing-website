@@ -24,7 +24,7 @@ export async function analyzeSubmittedUrl(
   options?: { persist?: boolean },
 ): Promise<AnalyzeExecutionResult | AnalyzeValidationError> {
   const validated = validateAndNormalizeUrl(rawUrl);
-  if (!validated.valid || !validated.signals) {
+  if (!validated.valid || !validated.signals || !validated.breakdown) {
     return {
       ok: false,
       error: validated.error || 'Invalid URL provided.',
@@ -34,7 +34,7 @@ export async function analyzeSubmittedUrl(
 
   const [threatIntelResults, mlPrediction, websiteInspection] = await Promise.all([
     runAllThreatIntelChecks(validated.normalizedUrl, validated.domain),
-    predictUrlWithMl(validated.normalizedUrl),
+    predictUrlWithMl(validated.submittedUrl),
     inspectWebsiteSafely(validated.normalizedUrl),
   ]);
 
@@ -45,6 +45,7 @@ export async function analyzeSubmittedUrl(
   const scoring = computeCombinedRiskAssessment({
     domain: validated.domain,
     signals: validated.signals,
+    breakdown: validated.breakdown,
     mlPrediction,
     threatIntelResults,
     keywordMatches,
@@ -62,6 +63,8 @@ export async function analyzeSubmittedUrl(
     mlPrediction,
     inKnownThreatDatabase: scoring.inKnownThreatDatabase,
     keywordMatches,
+    evidenceFindings: scoring.evidenceFindings,
+    urlBreakdown: validated.breakdown,
     flaggedReasons: scoring.flaggedReasons,
     threatIntelResults,
     structuralSignals: validated.signals,

@@ -42,14 +42,39 @@ function sigmoid(z: number): number {
   return 1 / (1 + Math.exp(-z));
 }
 
+const BOOLEAN_FEATURES = new Set([
+  'has_ip_address',
+  'has_at_symbol',
+  'is_https',
+  'is_punycode',
+  'unicode_confusable_detected',
+  'has_suspicious_tld',
+  'is_url_shortener',
+  'has_suspicious_extension',
+  'has_word_number_anomaly',
+  'suspicious_brand_in_subdomain',
+  'brand_domain_mismatch',
+  'brand_in_path',
+  'encoded_keyword_detected',
+  'nested_url_detected',
+  'external_redirect_detected',
+  'unusual_port',
+  'suspicious_authentication_path',
+  'hostname_case_normalized',
+]);
+
 function formatStructuralValue(name: string, rawVal: number): string {
-  if (name.startsWith('has_') || name.startsWith('is_')) {
+  if (BOOLEAN_FEATURES.has(name) || name.startsWith('has_') || name.startsWith('is_')) {
     return rawVal > 0 ? 'Yes' : 'No';
   }
   if (name === 'url_length') return `${Math.round(rawVal * 100)} chars`;
   if (name === 'domain_length') return `${Math.round(rawVal * 30)} chars`;
   if (name === 'path_length') return `${Math.round(rawVal * 50)} chars`;
+  if (name === 'maximum_subdomain_length') return `${Math.round(rawVal * 20)} chars`;
   if (name === 'digit_ratio') return `${(rawVal * 10).toFixed(1)}%`;
+  if (name === 'encoded_character_ratio' || name === 'brand_similarity_score') {
+    return `${Math.round(rawVal * 100)}%`;
+  }
   return Number(rawVal.toFixed(2)).toString();
 }
 
@@ -106,7 +131,8 @@ export async function predictUrlWithMl(normalizedUrl: string): Promise<MlPredict
   let z = model.bias;
   const contributions: MlFeatureContribution[] = [];
 
-  for (let j = 0; j < STRUCTURAL_FEATURE_NAMES.length; j++) {
+  const featureCount = Math.min(STRUCTURAL_FEATURE_NAMES.length, model.structuralWeights.length);
+  for (let j = 0; j < featureCount; j++) {
     const name = STRUCTURAL_FEATURE_NAMES[j];
     const scaled = (extracted.structural[j] - model.scalerMean[j]) / model.scalerStd[j];
     const contrib = scaled * model.structuralWeights[j];

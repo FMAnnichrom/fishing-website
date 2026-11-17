@@ -1,4 +1,5 @@
 import { extractMlFeatures, STRUCTURAL_FEATURE_NAMES } from '../../backend/ml/features';
+import { safeBoundedDecode } from '../../backend/services/advancedUrlAnalyzer';
 import { computeCombinedRiskAssessment } from '../../backend/services/riskScorer';
 import { validateAndNormalizeUrl } from '../../backend/services/urlValidator';
 import { SEED_KEYWORDS, SEED_TEST_INDICATORS } from '../../shared/defaultCatalog';
@@ -120,19 +121,44 @@ function sigmoid(z: number): number {
   return 1 / (1 + Math.exp(-z));
 }
 
+const BOOLEAN_FEATURES = new Set([
+  'has_ip_address',
+  'has_at_symbol',
+  'is_https',
+  'is_punycode',
+  'unicode_confusable_detected',
+  'has_suspicious_tld',
+  'is_url_shortener',
+  'has_suspicious_extension',
+  'has_word_number_anomaly',
+  'suspicious_brand_in_subdomain',
+  'brand_domain_mismatch',
+  'brand_in_path',
+  'encoded_keyword_detected',
+  'nested_url_detected',
+  'external_redirect_detected',
+  'unusual_port',
+  'suspicious_authentication_path',
+  'hostname_case_normalized',
+]);
+
 function formatStructuralValue(name: string, rawVal: number): string {
-  if (name.startsWith('has_') || name.startsWith('is_')) {
+  if (BOOLEAN_FEATURES.has(name) || name.startsWith('has_') || name.startsWith('is_')) {
     return rawVal > 0 ? 'Yes' : 'No';
   }
   if (name === 'url_length') return `${Math.round(rawVal * 100)} chars`;
   if (name === 'domain_length') return `${Math.round(rawVal * 30)} chars`;
   if (name === 'path_length') return `${Math.round(rawVal * 50)} chars`;
+  if (name === 'maximum_subdomain_length') return `${Math.round(rawVal * 20)} chars`;
   if (name === 'digit_ratio') return `${(rawVal * 10).toFixed(1)}%`;
+  if (name === 'encoded_character_ratio' || name === 'brand_similarity_score') {
+    return `${Math.round(rawVal * 100)}%`;
+  }
   return Number(rawVal.toFixed(2)).toString();
 }
 
-export function predictInBrowser(normalizedUrl: string): MlPredictionResult {
-  const extracted = extractMlFeatures(normalizedUrl);
+export function predictInBrowser(rawOrNormalizedUrl: string): MlPredictionResult {
+  const extracted = extractMlFeatures(rawOrNormalizedUrl);
   if (!extracted) {
     return {
       label: 'unavailable',
@@ -147,7 +173,8 @@ export function predictInBrowser(normalizedUrl: string): MlPredictionResult {
   let z = MODEL.bias;
   const contributions: MlFeatureContribution[] = [];
 
-  for (let j = 0; j < STRUCTURAL_FEATURE_NAMES.length; j++) {
+  const featureCount = Math.min(STRUCTURAL_FEATURE_NAMES.length, MODEL.structuralWeights.length);
+  for (let j = 0; j < featureCount; j++) {
     const name = STRUCTURAL_FEATURE_NAMES[j];
     const scaled = (extracted.structural[j] - MODEL.scalerMean[j]) / MODEL.scalerStd[j];
     const contrib = scaled * MODEL.structuralWeights[j];
@@ -205,9 +232,13 @@ function escapeRegex(value: string): string {
 
 function detectKeywordsInBrowser(normalizedUrl: string): KeywordMatch[] {
   let urlSurface = normalizedUrl.toLowerCase();
+  let decodedSurface = urlSurface;
   try {
     const parsed = new URL(normalizedUrl);
     urlSurface = `${parsed.hostname}${parsed.pathname}${parsed.search}`.toLowerCase();
+    const decodedPath = safeBoundedDecode(parsed.pathname).decoded;
+    const decodedSearch = safeBoundedDecode(parsed.search).decoded;
+    decodedSurface = `${parsed.hostname}${decodedPath}${decodedSearch}`.toLowerCase();
   } catch {
     // Keep full normalized string
   }
@@ -217,7 +248,11 @@ function detectKeywordsInBrowser(normalizedUrl: string): KeywordMatch[] {
     const escaped = escapeRegex(kw.keyword.toLowerCase());
     const regex = new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, 'i');
     const compact = kw.keyword.toLowerCase().replace(/-/g, '');
-    if (regex.test(urlSurface) || (compact.length >= 6 && urlSurface.includes(compact))) {
+    if (
+      regex.test(urlSurface) ||
+      regex.test(decodedSurface) ||
+      (compact.length >= 6 && (urlSurface.includes(compact) || decodedSurface.includes(compact)))
+    ) {
       matches.push({
         keyword: kw.keyword,
         category: kw.category,
@@ -303,11 +338,11 @@ export function runStandaloneAnalysis(
   options?: { persist?: boolean },
 ): AnalysisReport {
   const validated = validateAndNormalizeUrl(rawUrl);
-  if (!validated.valid || !validated.signals) {
+  if (!validated.valid || !validated.signals || !validated.breakdown) {
     throw new Error(validated.error || 'Invalid URL provided.');
   }
 
-  const mlPrediction = predictInBrowser(validated.normalizedUrl);
+  const mlPrediction = predictInBrowser(validated.submittedUrl);
   const threatIntelResults = checkThreatIntelInBrowser(validated.normalizedUrl);
   const keywordMatches = detectKeywordsInBrowser(validated.normalizedUrl);
   const websiteInspection = {
@@ -320,6 +355,7 @@ export function runStandaloneAnalysis(
   const scoring = computeCombinedRiskAssessment({
     domain: validated.domain,
     signals: validated.signals,
+    breakdown: validated.breakdown,
     mlPrediction,
     threatIntelResults,
     keywordMatches,
@@ -337,6 +373,8 @@ export function runStandaloneAnalysis(
     mlPrediction,
     inKnownThreatDatabase: scoring.inKnownThreatDatabase,
     keywordMatches,
+    evidenceFindings: scoring.evidenceFindings,
+    urlBreakdown: validated.breakdown,
     flaggedReasons: scoring.flaggedReasons,
     threatIntelResults,
     structuralSignals: validated.signals,
@@ -355,28 +393,52 @@ export function runStandaloneAnalysis(
   return report;
 }
 
+function normalizeLegacyVerdict(
+  verdict: string,
+  inThreatDb = false,
+): AnalysisReport['verdict'] {
+  if (verdict === 'Malicious / Phishing') {
+    return inThreatDb ? 'Confirmed Malicious' : 'High Risk';
+  }
+  if (verdict === 'No Known Threat Detected') return 'No Known Threat';
+  if (verdict === 'Unknown / Unable to Verify') return 'Unable to Verify';
+  return verdict as AnalysisReport['verdict'];
+}
+
 export function getStandaloneAnalysisById(id: string): AnalysisReport {
   const all = ensureSeededAnalyses();
   const found = all.find((a) => a.id === id);
   if (!found) {
     throw new Error('Analysis record not found in browser storage.');
   }
-  return found;
+  // If loaded from older cached localStorage entry without urlBreakdown, re-run analysis cleanly
+  if (!found.urlBreakdown || !found.evidenceFindings) {
+    return runStandaloneAnalysis(found.submittedUrl || found.normalizedUrl, { persist: false });
+  }
+  return {
+    ...found,
+    verdict: normalizeLegacyVerdict(found.verdict, found.inKnownThreatDatabase),
+  };
 }
 
 export function getStandaloneStatsAndRecent(limit = 15): {
   summary: StatsSummary;
   recentScans: RecentScanItem[];
 } {
-  const all = ensureSeededAnalyses();
+  const all = ensureSeededAnalyses().map((a) => ({
+    ...a,
+    verdict: normalizeLegacyVerdict(a.verdict, a.inKnownThreatDatabase),
+  }));
   const reports = readStoredReports();
 
   const summary: StatsSummary = {
     totalAnalyzed: all.length,
-    maliciousDetected: all.filter((a) => a.verdict === 'Malicious / Phishing').length,
+    maliciousDetected: all.filter(
+      (a) => a.verdict === 'Confirmed Malicious' || a.verdict === 'High Risk',
+    ).length,
     suspiciousDetected: all.filter((a) => a.verdict === 'Suspicious').length,
-    noKnownThreat: all.filter((a) => a.verdict === 'No Known Threat Detected').length,
-    unableToVerify: all.filter((a) => a.verdict === 'Unknown / Unable to Verify').length,
+    noKnownThreat: all.filter((a) => a.verdict === 'No Known Threat').length,
+    unableToVerify: all.filter((a) => a.verdict === 'Unable to Verify').length,
     threatIntelMatches: all.filter((a) => a.inKnownThreatDatabase).length,
     activeFeedIndicators: SEED_TEST_INDICATORS.length,
     pendingUserReports: reports.filter((r) => r.status === 'unverified').length,

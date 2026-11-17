@@ -50,7 +50,7 @@ export function ModelEvaluationView() {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-xl border border-slate-200 bg-white p-6">
+      <section className="rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-xs">
         <div className="flex items-start gap-3">
           <Cpu className="h-5 w-5 text-blue-700 mt-0.5 shrink-0" aria-hidden="true" />
           <div>
@@ -113,7 +113,7 @@ export function ModelEvaluationView() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Dataset Split & Confusion Matrix */}
-        <section className="rounded-xl border border-slate-200 bg-white p-6 space-y-6">
+        <section className="rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-xs space-y-6">
           <div>
             <h3 className="text-sm font-semibold text-slate-900">
               Leak-Free Dataset Splits (Grouped by Domain)
@@ -178,7 +178,7 @@ export function ModelEvaluationView() {
         </section>
 
         {/* Top Learned Weights */}
-        <section className="rounded-xl border border-slate-200 bg-white p-6">
+        <section className="rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-xs">
           <h3 className="text-sm font-semibold text-slate-900">
             Top Learned Model Feature Weights
           </h3>

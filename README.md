@@ -8,10 +8,11 @@ An evidence-based phishing URL detection platform combining machine learning (UR
 
 ## Architecture Overview
 
-- **Frontend (`src/`)**: React + Vite + Tailwind CSS + Lucide icons. Single-input URL analyzer, transparent 10-point security assessment report, expandable detection details, recent scan history, threat statistics, threat-feed & keyword explorer, ML evaluation dashboard, and suspicious URL reporting workflow.
+- **Frontend (`src/`)**: React + Vite + Tailwind CSS + Lucide icons. Single-input URL analyzer, transparent security assessment report with 5-tier verdicts (`Confirmed Malicious`, `High Risk`, `Suspicious`, `No Known Threat`, `Unable to Verify`), prioritized `Evidence Findings`, expandable `Advanced URL Analysis` (PSL registrable domain, subdomains, decoded paths, query parameters, brand similarity), recent scan history, threat statistics, threat-feed & keyword explorer, ML evaluation dashboard, and suspicious URL reporting workflow.
+- **Advanced URL Analysis & Brand Detection (`backend/services/advancedUrlAnalyzer.ts`, `backend/services/brandDetector.ts`)**: Public Suffix List (`tldts`) domain extraction, mixed-case hostname normalization, bounded percent-decoding for hex obfuscation, nested & external redirect analysis, duplicate/lure query parameter inspection, contextual non-standard port classification, Unicode homoglyph normalization, and Damerau-Levenshtein/leetspeak brand lookalike detection.
 - **Backend (`server.ts`, `backend/`)**: Node.js + Express + SQLite (`node:sqlite`, persistent at `./data/phishing_detector.db`) with Helmet CSP headers, CORS restrictions, rate limiting, input validation, SSRF/DNS-rebinding guards, and Bearer-protected admin routes.
 - **ML Inference & Training (`backend/ml/` & `ml-service/`)**:
-  - Embedded Node.js/TypeScript L2-regularized Logistic Regression model (Structural Features + Character 3–4 Gram TF-IDF) trained via `npx tsx backend/ml/train.ts` and persisted at `ml-service/models/url_classifier_model.json`.
+  - Embedded Node.js/TypeScript L2-regularized Logistic Regression model (34 Structural/Brand/Redirect/Encoding Features + Character 3–4 Gram TF-IDF) trained via `npx tsx backend/ml/train.ts` and persisted at `ml-service/models/url_classifier_model.json`.
   - Optional Python FastAPI + Scikit-learn RandomForest microservice (`ml-service/main.py`, `ml-service/training/train_model.py`) configurable via `ML_SERVICE_URL` and `docker-compose.yml`.
 
 ---

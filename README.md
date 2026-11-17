@@ -94,3 +94,28 @@ python scripts/ingest_threat_feeds.py
 - `GET /api/model/evaluation` — Inspect held-out ML validation/test metrics and confusion matrix.
 - `GET /api/health` — Check backend, ML engine, and provider configuration status.
 - `POST /api/admin/feeds/sync` — Trigger public threat feed sync (`Authorization: Bearer <ADMIN_API_KEY>`).
+
+
+---
+
+## Standalone GitHub Pages Deployment
+
+This repository also builds as a **100% standalone static web app** for **GitHub Pages** (`dist/`) with no Node.js or database server required.
+
+In standalone mode (`npm run build:pages` or when `/api/*` is unavailable):
+- The trained Logistic Regression + Character N-Gram TF-IDF ML model (`ml-service/models/url_classifier_model.json`), URL validator, structural analyzer, keyword detector, and combined risk scorer execute directly inside the browser.
+- Recent scans, statistics, and community URL reports persist locally in browser `localStorage`.
+- External threat-intelligence providers (`Google Safe Browsing`, `PhishTank`, `URLhaus`) honestly indicate that a backend proxy is required to protect private API keys.
+
+### Deploy via GitHub Actions (Included)
+
+1. Push this repository to GitHub with `main` as your default branch.
+2. In your GitHub repository, open **Settings → Pages** and set **Source** to **GitHub Actions**.
+3. The included workflow (`.github/workflows/deploy-pages.yml`) automatically runs ML training, executes unit tests, builds `dist/` via `npm run build:pages`, and publishes to `https://<your-username>.github.io/<repo-name>/`.
+
+### Local Static Build Check
+
+```bash
+npm run build:pages
+npx vite preview --port 4173
+```

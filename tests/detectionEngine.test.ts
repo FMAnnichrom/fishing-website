@@ -7,6 +7,12 @@ import { detectSuspiciousKeywords } from '../backend/services/keywordDetector';
 import { computeCombinedRiskAssessment } from '../backend/services/riskScorer';
 import { isPrivateOrReservedIp, validateOutboundTarget } from '../backend/services/ssrfGuard';
 import { validateAndNormalizeUrl } from '../backend/services/urlValidator';
+import {
+  getStandaloneModelEvaluation,
+  getStandaloneStatsAndRecent,
+  runStandaloneAnalysis,
+  submitStandaloneReport,
+} from '../src/standalone/engine';
 
 // Ensure DB and trained model are initialized
 getDatabase(':memory:');
@@ -181,4 +187,29 @@ test('trained ML predictor returns real probability and feature explanations', a
   assert.equal(phishPred.label, 'phishing');
   assert.ok(phishPred.probability > 0.5);
   assert.ok(phishPred.topFeatures.length > 0);
+});
+
+test('standalone GitHub Pages engine runs real ML, keyword, and risk scoring without backend', () => {
+  const phishReport = runStandaloneAnalysis(
+    'http://secure-paypal-login-verify.xyz/account/update?confirm-identity=1',
+    { persist: true },
+  );
+  assert.equal(phishReport.verdict, 'Malicious / Phishing');
+  assert.ok(phishReport.riskScore >= 60);
+  assert.equal(phishReport.mlPrediction.label, 'phishing');
+  assert.ok(phishReport.keywordMatches.length >= 3);
+
+  const legitReport = runStandaloneAnalysis('https://github.com/login', { persist: true });
+  assert.equal(legitReport.verdict, 'No Known Threat Detected');
+  assert.ok(legitReport.riskScore < 30);
+
+  const stats = getStandaloneStatsAndRecent(10);
+  assert.ok(stats.summary.totalAnalyzed >= 2);
+  assert.ok(stats.recentScans.length >= 2);
+
+  const rep = submitStandaloneReport('https://suspicious-test.example.invalid/auth', 'Test report');
+  assert.equal(rep.report.status, 'unverified');
+
+  const evalData = getStandaloneModelEvaluation();
+  assert.ok(evalData.datasetStats.deduplicatedRows > 100);
 });

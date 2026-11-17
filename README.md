@@ -1,11 +1,96 @@
-<div align="center">
+# AI-Powered Phishing URL Detection System
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+An evidence-based phishing URL detection platform combining machine learning (URL structural features + character n-gram TF-IDF), multi-provider threat-intelligence adapters, categorized suspicious keyword detection, persistent threat-feed ingestion, and optional SSRF-hardened website inspection.
 
-  <h1>Built with AI Studio</h2>
+> **Security Note**: No automated system can guarantee that a website is completely safe. A newly launched phishing domain may not yet appear in any threat-intelligence feed. Always verify domains independently before entering sensitive credentials.
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+---
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## Architecture Overview
 
-</div>
+- **Frontend (`src/`)**: React + Vite + Tailwind CSS + Lucide icons. Single-input URL analyzer, transparent 10-point security assessment report, expandable detection details, recent scan history, threat statistics, threat-feed & keyword explorer, ML evaluation dashboard, and suspicious URL reporting workflow.
+- **Backend (`server.ts`, `backend/`)**: Node.js + Express + SQLite (`node:sqlite`, persistent at `./data/phishing_detector.db`) with Helmet CSP headers, CORS restrictions, rate limiting, input validation, SSRF/DNS-rebinding guards, and Bearer-protected admin routes.
+- **ML Inference & Training (`backend/ml/` & `ml-service/`)**:
+  - Embedded Node.js/TypeScript L2-regularized Logistic Regression model (Structural Features + Character 3–4 Gram TF-IDF) trained via `npx tsx backend/ml/train.ts` and persisted at `ml-service/models/url_classifier_model.json`.
+  - Optional Python FastAPI + Scikit-learn RandomForest microservice (`ml-service/main.py`, `ml-service/training/train_model.py`) configurable via `ML_SERVICE_URL` and `docker-compose.yml`.
+
+---
+
+## Quick Start
+
+1. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+2. **Train the ML model** (generates `ml-service/models/url_classifier_model.json` from `ml-service/datasets/urls_dataset.csv` with domain-grouped train/validation/test splits):
+   ```bash
+   npx tsx backend/ml/train.ts
+   ```
+
+3. **Run tests**:
+   ```bash
+   npx tsx --test tests/detectionEngine.test.ts
+   ```
+
+4. **Start the application** (runs Express API + Vite frontend on port `3000`):
+   ```bash
+   npm run dev
+   ```
+
+---
+
+## Threat-Intelligence API Configuration
+
+Copy `.env.example` to `.env` and configure any desired server-side API keys (never place keys in frontend code):
+
+| Variable | Provider | Purpose |
+| :--- | :--- | :--- |
+| `GOOGLE_SAFE_BROWSING_API_KEY` | Google Safe Browsing v4 | Checks URLs against Google's `SOCIAL_ENGINEERING` & `MALWARE` lists |
+| `PHISHTANK_API_KEY` | PhishTank | Queries community-verified phishing submissions |
+| `URLHAUS_AUTH_KEY` | abuse.ch URLhaus | Queries malware & payload distribution URLs |
+| `ENABLE_PUBLIC_FEED_SYNC` | OpenPhish & URLhaus Feeds | Set `true` to periodically ingest public feeds into local SQLite storage |
+| `ADMIN_API_KEY` | Admin Endpoints | Required Bearer token for `POST /api/admin/feeds/sync`, `POST /api/admin/keywords`, and `GET /api/admin/reports` |
+
+When an external API key is not configured, the backend honestly reports `not_configured` instead of fabricating results.
+
+---
+
+## Optional Isolated Website Inspection
+
+Website inspection is **disabled by default** (`ENABLE_WEBSITE_INSPECTION=false`). When enabled in an isolated deployment:
+- Rejects non-HTTP(S) schemes and embedded credentials (`user:pass@`).
+- Validates DNS resolution before connecting and on every manual redirect hop (max 3 hops) to block loopback, RFC1918 private networks, IPv6 local addresses, and cloud metadata IPs (`169.254.169.254`).
+- Enforces strict 4s request timeout, 512KB download cap, no cookies/credentials, and non-executing static HTML text extraction.
+
+---
+
+## Running the Standalone Python ML Service & Feed Ingestion (Optional)
+
+With Python 3.10+ and Docker/pip installed:
+```bash
+cd ml-service
+pip install -r requirements.txt
+python training/train_model.py
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+Set `ML_SERVICE_URL=http://localhost:8000` in `.env` to route ML inference to FastAPI (automatically falls back to the embedded trained model if unreachable).
+
+To ingest public OpenPhish and URLhaus feeds via Python:
+```bash
+python scripts/ingest_threat_feeds.py
+```
+
+---
+
+## Key API Endpoints
+
+- `POST /api/analyze` — Validate, normalize, and analyze a submitted URL.
+- `GET /api/analyze/:id` — Retrieve a stored analysis report by ID.
+- `GET /api/stats` — Retrieve detection statistics and recent scans.
+- `POST /api/reports` — Submit a suspicious URL for review (stored as `unverified`).
+- `GET /api/keywords` — List active categorized suspicious keywords.
+- `GET /api/threat-feeds` — List active local threat indicators and pending user reports.
+- `GET /api/model/evaluation` — Inspect held-out ML validation/test metrics and confusion matrix.
+- `GET /api/health` — Check backend, ML engine, and provider configuration status.
+- `POST /api/admin/feeds/sync` — Trigger public threat feed sync (`Authorization: Bearer <ADMIN_API_KEY>`).

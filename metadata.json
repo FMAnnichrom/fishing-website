@@ -1,0 +1,6 @@
+{
+  "name": "Phishing URL Detector",
+  "description": "Evidence-based AI phishing URL detection platform combining machine learning, keyword analysis, URL structure inspection, and threat-intelligence feeds.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
